@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>贪吃蛇</title>
+  <style>
+    :root {
+      --bg: #0f1220;
+      --panel: #1a1a2e;
+      --grid: #22223b;
+      --snake: #4ade80;
+      --head: #bbf7d0;
+      --food: #f43f5e;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(ellipse at top, #243056 0%, transparent 55%),
+        var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    }
+
+    .wrap {
+      width: min(640px, calc(100vw - 24px));
+      padding: 20px 16px 28px;
+    }
+
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: 0.08em;
+    }
+
+    #score {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--snake);
+    }
+
+    .board-shell {
+      position: relative;
+      background: var(--panel);
+      border-radius: 16px;
+      padding: 10px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 10px;
+      background: var(--panel);
+      touch-action: none;
+    }
+
+    #overlay {
+      position: absolute;
+      inset: 10px;
+      display: none;
+      place-items: center;
+      text-align: center;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.55);
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1.6;
+      white-space: pre-line;
+    }
+
+    #overlay.show { display: grid; }
+
+    .hint {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      text-align: center;
+    }
+
+    .hint .touch { display: none; }
+
+    .pad {
+      display: none;
+      margin-top: 16px;
+      grid-template-columns: repeat(3, 72px);
+      gap: 8px;
+      justify-content: center;
+    }
+
+    .pad button {
+      height: 52px;
+      border: 0;
+      border-radius: 12px;
+      background: #2a2a44;
+      color: var(--text);
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .pad button:active { background: #3b3b5c; }
+    .pad .spacer { visibility: hidden; }
+
+    @media (pointer: coarse) {
+      .pad { display: grid; }
+      .hint .keys { display: none; }
+      .hint .touch { display: inline; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <h1>贪吃蛇</h1>
+      <div id="score">得分: 0</div>
+    </header>
+    <div class="board-shell">
+      <canvas id="board" width="600" height="400"></canvas>
+      <div id="overlay"></div>
+    </div>
+    <p class="hint">
+      <span class="keys">方向键 / WASD 移动 · 空格暂停 · R 重新开始</span>
+      <span class="touch">滑动或点方向键移动</span>
+    </p>
+    <div class="pad" aria-label="方向控制">
+      <span class="spacer"></span>
+      <button type="button" data-dir="up" aria-label="上">↑</button>
+      <span class="spacer"></span>
+      <button type="button" data-dir="left" aria-label="左">←</button>
+      <button type="button" id="pause" aria-label="暂停">❚❚</button>
+      <button type="button" data-dir="right" aria-label="右">→</button>
+      <span class="spacer"></span>
+      <button type="button" data-dir="down" aria-label="下">↓</button>
+      <button type="button" id="restart" aria-label="重新开始">↻</button>
+    </div>
+  </main>
+  <script>
+    const COLS = 30;
+    const ROWS = 20;
+    const TICK_MS = 110;
+    const canvas = document.getElementById("board");
+    const ctx = canvas.getContext("2d");
+    const scoreEl = document.getElementById("score");
+    const overlay = document.getElementById("overlay");
+
+    const DIRS = {
+      up: [0, -1],
+      down: [0, 1],
+      left: [-1, 0],
+      right: [1, 0],
+    };
+
+    let snake, direction, pending, alive, paused, score, food, timer;
+
+    function reset() {
+      const midX = Math.floor(COLS / 2);
+      const midY = Math.floor(ROWS / 2);
+      snake = [
+        [midX, midY],
+        [midX - 1, midY],
+        [midX - 2, midY],
+      ];
+      direction = [1, 0];
+      pending = [1, 0];
+      alive = true;
+      paused = false;
+      score = 0;
+      scoreEl.textContent = "得分: 0";
+      spawnFood();
+      draw();
+      schedule();
+    }
+
+    function schedule() {
+      clearTimeout(timer);
+      const delay = Math.max(55, TICK_MS - score * 2);
+      timer = setTimeout(tick, delay);
+    }
+
+    function spawnFood() {
+      const taken = new Set(snake.map(([x, y]) => `${x},${y}`));
+      const free = [];
+      for (let x = 0; x < COLS; x++) {
+        for (let y = 0; y < ROWS; y++) {
+          if (!taken.has(`${x},${y}`)) free.push([x, y]);
+        }
+      }
+      food = free.length ? free[Math.floor(Math.random() * free.length)] : null;
+    }
+
+    function setDirection(name) {
+      if (!alive || paused) return;
+      const [dx, dy] = DIRS[name];
+      const [cx, cy] = direction;
+      if (dx !== -cx || dy !== -cy) pending = [dx, dy];
+    }
+
+    function togglePause() {
+      if (!alive) return;
+      paused = !paused;
+      draw();
+    }
+
+    function tick() {
+      if (alive && !paused) {
+        direction = pending;
+        const [hx, hy] = snake[0];
+        const [dx, dy] = direction;
+        const head = [hx + dx, hy + dy];
+        const hitWall = head[0] < 0 || head[0] >= COLS || head[1] < 0 || head[1] >= ROWS;
+        const hitSelf = snake.some(([x, y]) => x === head[0] && y === head[1]);
+        if (hitWall || hitSelf) {
+          alive = false;
+        } else {
+          snake.unshift(head);
+          if (food && head[0] === food[0] && head[1] === food[1]) {
+            score += 1;
+            scoreEl.textContent = `得分: ${score}`;
+            spawnFood();
+            if (!food) alive = false;
+          } else {
+            snake.pop();
+          }
+        }
+        draw();
+      }
+      schedule();
+    }
+
+    function draw() {
+      const cell = canvas.width / COLS;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (let x = 0; x < COLS; x++) {
+        for (let y = 0; y < ROWS; y++) {
+          if ((x + y) % 2 === 0) {
+            ctx.fillStyle = "#22223b";
+            ctx.fillRect(x * cell, y * cell, cell, cell);
+          }
+        }
+      }
+
+      if (food) {
+        const pad = cell * 0.15;
+        ctx.fillStyle = "#f43f5e";
+        ctx.beginPath();
+        ctx.arc(
+          food[0] * cell + cell / 2,
+          food[1] * cell + cell / 2,
+          cell / 2 - pad,
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+      }
+
+      snake.forEach(([x, y], i) => {
+        const pad = i === 0 ? 0 : cell * 0.06;
+        ctx.fillStyle = i === 0 ? "#bbf7d0" : "#4ade80";
+        ctx.fillRect(x * cell + pad, y * cell + pad, cell - pad * 2, cell - pad * 2);
+      });
+
+      if (!alive) {
+        const msg = food ? `游戏结束\n得分 ${score}\n按 R 重新开始` : `你赢了！\n得分 ${score}\n按 R 重新开始`;
+        showOverlay(msg);
+      } else if (paused) {
+        showOverlay("已暂停\n按空格继续");
+      } else {
+        overlay.classList.remove("show");
+        overlay.textContent = "";
+      }
+    }
+
+    function showOverlay(text) {
+      overlay.textContent = text;
+      overlay.classList.add("show");
+    }
+
+    const keyMap = {
+      arrowup: "up",
+      w: "up",
+      arrowdown: "down",
+      s: "down",
+      arrowleft: "left",
+      a: "left",
+      arrowright: "right",
+      d: "right",
+    };
+
+    window.addEventListener("keydown", (event) => {
+      const key = event.key.toLowerCase();
+      if (keyMap[key]) {
+        event.preventDefault();
+        setDirection(keyMap[key]);
+      } else if (key === " ") {
+        event.preventDefault();
+        togglePause();
+      } else if (key === "r") {
+        reset();
+      }
+    });
+
+    document.querySelectorAll("[data-dir]").forEach((btn) => {
+      btn.addEventListener("click", () => setDirection(btn.dataset.dir));
+    });
+    document.getElementById("pause").addEventListener("click", togglePause);
+    document.getElementById("restart").addEventListener("click", reset);
+
+    let touchStart = null;
+    canvas.addEventListener("pointerdown", (event) => {
+      touchStart = [event.clientX, event.clientY];
+    });
+    canvas.addEventListener("pointerup", (event) => {
+      if (!touchStart) return;
+      const dx = event.clientX - touchStart[0];
+      const dy = event.clientY - touchStart[1];
+      touchStart = null;
+      if (Math.hypot(dx, dy) < 24) return;
+      if (Math.abs(dx) > Math.abs(dy)) setDirection(dx > 0 ? "right" : "left");
+      else setDirection(dy > 0 ? "down" : "up");
+    });
+
+    reset();
+  </script>
+</body>
+</html>
